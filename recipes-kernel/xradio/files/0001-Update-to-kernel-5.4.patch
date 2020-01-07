@@ -1,0 +1,212 @@
+From 5f08fb4b8a9151238151dabb27b7ba0f8042f7bb Mon Sep 17 00:00:00 2001
+From: Jan Kiszka <jan.kiszka@siemens.com>
+Date: Sat, 4 Jan 2020 14:35:23 +0100
+Subject: [PATCH] Update to kernel 5.4
+
+This addresses issues surfaced by or introduced with kernel 5.4.
+
+Signed-off-by: Jan Kiszka <jan.kiszka@siemens.com>
+---
+ .gitignore |  1 +
+ Makefile   |  3 ++-
+ main.c     | 17 ++++++++---------
+ queue.c    |  3 ++-
+ scan.c     |  3 ++-
+ sdio.c     |  4 +---
+ sta.c      |  5 +++++
+ sta.h      |  5 +++++
+ wsm.c      |  4 ++--
+ 9 files changed, 28 insertions(+), 17 deletions(-)
+
+diff --git a/.gitignore b/.gitignore
+index eae6529..5e83f7f 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -4,4 +4,5 @@ Module.symvers
+ modules.order
+ .tmp_versions
+ *.ko
++*.mod
+ *.mod.c
+diff --git a/Makefile b/Makefile
+index fd15d31..b5b2628 100644
+--- a/Makefile
++++ b/Makefile
+@@ -1,5 +1,4 @@
+ CONFIG_XRADIO := m
+-CONFIG_XRADIO_USE_EXTENSIONS := y
+ 
+ xradio_wlan-y := \
+ 	fwio.o \
+@@ -20,6 +19,8 @@ xradio_wlan-y := \
+ 	ht.o \
+ 	p2p.o
+ 
++ccflags-y += -DCONFIG_XRADIO_USE_EXTENSIONS
++
+ ccflags-y += -DMCAST_FWDING
+ ccflags-y += -DXRADIO_SUSPEND_RESUME_FILTER_ENABLE
+ ccflags-y += -DAP_AGGREGATE_FW_FIX
+diff --git a/main.c b/main.c
+index 47efa0c..26e388c 100644
+--- a/main.c
++++ b/main.c
+@@ -530,21 +530,21 @@ int xradio_core_init(struct sdio_func* func)
+ 	err = xradio_pm_init(&hw_priv->pm_state, hw_priv);
+ 	if (err) {
+ 		dev_dbg(hw_priv->pdev, "xradio_pm_init failed(%d).\n", err);
+-		goto err2;
++		goto err1;
+ 	}
+ #endif
+ 	/* Register bh thread*/
+ 	err = xradio_register_bh(hw_priv);
+ 	if (err) {
+ 		dev_dbg(hw_priv->pdev, "xradio_register_bh failed(%d).\n", err);
+-		goto err3;
++		goto err2;
+ 	}
+ 
+ 	/* Load firmware and register Interrupt Handler */
+ 	err = xradio_load_firmware(hw_priv);
+ 	if (err) {
+ 		dev_dbg(hw_priv->pdev, "xradio_load_firmware failed(%d).\n", err);
+-		goto err4;
++		goto err3;
+ 	}
+ 
+ 	/* Set sdio blocksize. */
+@@ -560,7 +560,7 @@ int xradio_core_init(struct sdio_func* func)
+ 		/*       in QUEUE mode properly.           */
+ 		dev_dbg(hw_priv->pdev, "Firmware Startup Timeout!\n");
+ 		err = -ETIMEDOUT;
+-		goto err5;
++		goto err4;
+ 	}
+ 	dev_dbg(hw_priv->pdev, "Firmware Startup Done.\n");
+ 
+@@ -582,18 +582,17 @@ int xradio_core_init(struct sdio_func* func)
+ 	err = xradio_register_common(dev);
+ 	if (err) {
+ 		dev_dbg(hw_priv->pdev, "xradio_register_common failed(%d)!\n", err);
+-		goto err5;
++		goto err4;
+ 	}
+ 
+ 	return err;
+ 
+-err5:
+-	xradio_dev_deinit(hw_priv);
+ err4:
+-	xradio_unregister_bh(hw_priv);
++	xradio_dev_deinit(hw_priv);
+ err3:
+-	xradio_pm_deinit(&hw_priv->pm_state);
++	xradio_unregister_bh(hw_priv);
+ err2:
++	xradio_pm_deinit(&hw_priv->pm_state);
+ err1:
+ 	xradio_free_common(dev);
+ 	return err;
+diff --git a/queue.c b/queue.c
+index fc2e4cb..1bb7f0e 100644
+--- a/queue.c
++++ b/queue.c
+@@ -231,7 +231,8 @@ int xradio_queue_init(struct xradio_queue *queue,
+ 
+ 	for (i = 0; i < XRWL_MAX_VIFS; i++) {
+ 		queue->link_map_cache[i] =
+-				kzalloc(sizeof(int[stats->map_capacity]), GFP_KERNEL);
++				kzalloc(sizeof(int) * stats->map_capacity,
++					GFP_KERNEL);
+ 		if (!queue->link_map_cache[i]) {
+ 			for (; i >= 0; i--)
+ 				kfree(queue->link_map_cache[i]);
+diff --git a/scan.c b/scan.c
+index a8829c0..73c2032 100644
+--- a/scan.c
++++ b/scan.c
+@@ -477,7 +477,8 @@ void xradio_scan_work(struct work_struct *work)
+ 			scan.scanType = WSM_SCAN_TYPE_BACKGROUND;
+ 			scan.scanFlags = WSM_SCAN_FLAG_FORCE_BACKGROUND;
+ 		}
+-		scan.ch = kzalloc(sizeof(struct wsm_scan_ch[it - hw_priv->scan.curr]), GFP_KERNEL);
++		scan.ch = kzalloc(sizeof(struct wsm_scan_ch) *
++				  (it - hw_priv->scan.curr), GFP_KERNEL);
+ 		if (!scan.ch) {
+ 			hw_priv->scan.status = -ENOMEM;
+ 			scan_printk(XRADIO_DBG_ERROR, "xr_kzalloc wsm_scan_ch failed.\n");
+diff --git a/sdio.c b/sdio.c
+index 8c831f8..adec058 100644
+--- a/sdio.c
++++ b/sdio.c
+@@ -147,9 +147,7 @@ static int xradio_probe_of(struct sdio_func *func)
+ 		return -EINVAL;
+ 	}
+ 
+-	devm_request_irq(dev, irq, sdio_irq_handler, 0, "xradio", func);
+-
+-	return 0;
++	return devm_request_irq(dev, irq, sdio_irq_handler, 0, "xradio", func);
+ }
+ 
+ /* Probe Function to be called by SDIO stack when device is discovered */
+diff --git a/sta.c b/sta.c
+index 7367de6..56f58df 100644
+--- a/sta.c
++++ b/sta.c
+@@ -973,7 +973,12 @@ int xradio_remain_on_channel(struct ieee80211_hw *hw,
+ 	return ret;
+ }
+ 
++#if (LINUX_VERSION_CODE >= KERNEL_VERSION(5, 4, 0))
++int xradio_cancel_remain_on_channel(struct ieee80211_hw *hw,
++				    struct ieee80211_vif *vif)
++#else
+ int xradio_cancel_remain_on_channel(struct ieee80211_hw *hw)
++#endif
+ {
+ 	struct xradio_common *hw_priv = hw->priv;
+ 
+diff --git a/sta.h b/sta.h
+index cd46eef..ffdad4a 100644
+--- a/sta.h
++++ b/sta.h
+@@ -64,7 +64,12 @@ int xradio_remain_on_channel(struct ieee80211_hw *hw,
+ 			     struct ieee80211_vif *vif,
+                              struct ieee80211_channel *chan,
+                              int duration, enum ieee80211_roc_type type);
++#if (LINUX_VERSION_CODE >= KERNEL_VERSION(5, 4, 0))
++int xradio_cancel_remain_on_channel(struct ieee80211_hw *hw,
++				    struct ieee80211_vif *vif);
++#else
+ int xradio_cancel_remain_on_channel(struct ieee80211_hw *hw);
++#endif
+ int xradio_set_arpreply(struct ieee80211_hw *hw, struct ieee80211_vif *vif);
+ u64 xradio_prepare_multicast(struct ieee80211_hw *hw,
+                              struct netdev_hw_addr_list *mc_list);
+diff --git a/wsm.c b/wsm.c
+index 927b0f2..747b265 100644
+--- a/wsm.c
++++ b/wsm.c
+@@ -2808,7 +2808,7 @@ int wsm_get_tx(struct xradio_common *hw_priv, u8 **data,
+ 			}
+ #else
+ 			{
+-				struct ieee80211_hdr *hdr =
++				struct ieee80211_hdr *hdr __maybe_unused =
+ 				(struct ieee80211_hdr *)
+ 					&((u8 *)wsm)[txpriv->offset];
+ 
+@@ -2852,7 +2852,7 @@ int wsm_get_tx(struct xradio_common *hw_priv, u8 **data,
+ 			}
+ #else
+ 			{
+-				struct ieee80211_hdr *hdr =
++				struct ieee80211_hdr *hdr __maybe_unused =
+ 				(struct ieee80211_hdr *)
+ 					&((u8 *)wsm)[txpriv->offset];
+ 
+-- 
+2.16.4
+
