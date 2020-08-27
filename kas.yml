@@ -20,8 +20,8 @@ repos:
   jailhouse:
 
   isar:
-    url: https://github.com/ilbers/isar
-    refspec: 1cfe166c5e53ae96bc07b895a92bf6cd7ace7bc9
+    url: https://github.com/vj-kumar/isar
+    refspec: 723d5ef9fc102327e2b51ef3ef7156b65694d0b8
     layers:
       meta:
 
